@@ -1,0 +1,38 @@
+trigger;
+- main
+
+pool:
+  vmImage: linux-latest
+
+stages:
+- stage: build
+  displayName: Build
+  steps:
+     - task: UseDotNet@2
+       inputs:
+         version: 8.x
+      - task: DotNetCoreCLI@2
+        displayName: Build Function App
+        inputs:
+          command: 'build'
+          Project: |
+            $(System.DefaultWorkingDirectory)/FunctionAppRepo/FunctionApp.csproj
+          arguments: --output $(System.DefaultWorkingDirectory)/function-package --configuration Release
+      - task:  DotNetCoreCLI@2
+        displayName: Dev Function App
+        inputs:
+          command: 'test'
+          Project: |
+            $(System.DefaultWorkingDirectory)/FunctionAppRepo/FunctionApp_test.csproj
+      - task:  ArchiveFiles@2
+        displayName: 'Archive'
+        inputs:
+          rootFolferOrFile: '$(System.DefaultWorkingDirectory)/function-package'
+          includeRootFolfer: false
+          archiveType: zip
+          archiveFiles: '$(Build.ArtifactStagingDirectory)/$(Build.BuildNumber).zip
+          
+        
+      
+        
+          
