@@ -1,0 +1,25 @@
+- stage: deployment_dev
+  displayname: Deployment to Dev
+  jobs:
+  - template: deployment.yaml
+    parameters:
+      AppServiceName: 'dev'
+      Environment: 'dev'
+      ResourceGroupName:  Info_client
+      ServiceConnectionName: 'AzureServiceConnection'
+      SubscriptionId: 'zzzzzzzz-1xxx-2340-9xxx-xxxxxxxxxxxx'
+
+  - stage: deployment_Uat
+    displayname: Deployment to UAT
+    jobs:
+    - template: deployment.yaml
+      parameters:
+        AppServiceName: 'uat'
+        Environment: 'uat'
+        ResourceGroupName:  Info_client
+        ServiceConnectionName: 'AzureServiceConnection'
+        SubscriptionId: 'zzzzzzzz-1xxx-2340-9xxx-xxxxxxxxxxxx'
+   
+  
+  
+  
