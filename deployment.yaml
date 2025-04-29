@@ -1,0 +1,28 @@
+parameters:
+- name: AppServiceName
+  type: string
+- name: Environment
+  type: string
+- name: ResourceGroupName
+  type: string
+- name: ServiceConnectionName
+  type: string
+- name: SubscriptionID
+  type: string
+
+jobs: 
+- job: deploy_resources
+  steps: 
+  - download: current
+    artifact: function-package
+  - task: AzureFunctionApp@2
+    displayName: Deploy Function App
+    inputs:
+       azureSubscription: '${{ parameters.ServerConnectionName }}'
+       appType: 'functionAppLinux'
+       appName: '${{ parameters.ResourceGroupName }}'
+       resouceGroupName: "${{ parameters.ResourceGroupName }}'
+       package: '$(Pipeline.Workspace0/function-package/$(Build.BuildNumber).zip'
+       
+    
+   
