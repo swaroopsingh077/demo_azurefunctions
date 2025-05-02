@@ -1,0 +1,164 @@
+trigger:
+  branches:
+    include:
+      - main
+
+variables:
+  acrName: 'myacr.azurecr.io'
+  imageName: 'myapp'
+  imageTag: '$(Build.BuildId)'
+  jfrogRepo: 'myjfrogrepo'
+  apimName: 'my-apim'
+  resourceGroup: 'Inforce_client'
+  serviceConnection: 'AzureServiceConnection'
+  subscriptionId: 'zzzzzzzz-1xxx-2340-9xxx-xxxxxxxxxxxx'
+  aksCluster: 'my-aks-cluster'
+  aksResourceGroup: 'Inforce_client'
+
+stages:
+
+# Part 1 - AKS Cluster Build & Scanning
+- stage: Build_and_Test_Image
+  displayName: 'Pull from JFrog & Test'
+  jobs:
+    - job: PullAndTest
+      displayName: 'Pull Image & Run Tests'
+      steps:
+        - script: |
+            docker login $(jfrogRepo) --username $JFROG_USER --password $JFROG_TOKEN
+            docker pull $(jfrogRepo)/$(imageName):latest
+            docker run --rm $(jfrogRepo)/$(imageName):latest dotnet test
+          displayName: 'Pull & Test Image'
+- stage: SAST_Scan
+  displayName: 'Run SonarQube SAST Scan'
+  jobs:
+    - job: RunSAST
+      steps:
+        - task: SonarQubePrepare@5
+          inputs:
+            SonarQube: 'SonarQubeServiceConnection'
+            scannerMode: 'MSBuild'
+            projectKey: 'myapp-project'
+            projectName: 'myapp'
+
+        - task: DotNetCoreCLI@2
+          inputs:
+            command: 'build'
+            projects: '**/*.csproj'
+
+        - task: SonarQubeAnalyze@5
+
+        - task: SonarQubePublish@5
+          inputs:
+            pollingTimeoutSec: '300'
+
+- stage: DAST_Scan
+  displayName: 'Run Veracode DAST Scan'
+  jobs:
+    - job: RunDAST
+      steps:
+        - task: Veracode@3
+          inputs:
+            ConnectionDetailsSelection: 'ServiceConnection'
+            AnalysisType: 'Dynamic'
+            veracodeAppProfile: 'myapp-profile'
+            veracodeDynamicScanURL: 'https://myapp-url'
+            failBuildIfUploadAndScanFails: true
+
+- stage: Push_To_ACR
+  displayName: 'Push Image to ACR'
+  dependsOn: [Build_and_Test_Image, SAST_Scan, DAST_Scan]
+  jobs:
+    - job: PushImage
+      steps:
+        - script: |
+            az acr login --name $(acrName)
+            docker tag $(jfrogRepo)/$(imageName):latest $(acrName)/$(imageName):$(imageTag)
+            docker push $(acrName)/$(imageName):$(imageTag)
+          displayName: 'Tag & Push to ACR'
+# Part 1.5 - AKS Deployment
+- stage: Deploy_To_AKS
+  displayName: 'Deploy Image to AKS'
+  dependsOn: Push_To_ACR
+  jobs:
+    - job: DeployImage
+      displayName: 'Deploy to AKS'
+      steps:
+        - task: AzureCLI@2
+          inputs:
+            azureSubscription: $(serviceConnection)
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              az aks get-credentials --resource-group $(aksResourceGroup) --name $(aksCluster) --overwrite-existing
+              kubectl set image deployment/myapp-deployment myapp-container=$(acrName)/$(imageName):$(imageTag)
+              kubectl rollout status deployment/myapp-deployment
+          displayName: 'Deploy Updated Image to AKS'
+
+# Part 2 - APIM Integration
+- stage: APIM_Integration
+  displayName: 'Create and Export APIM API'
+  jobs:
+    - job: CreateAPI
+      steps:
+        - task: AzureCLI@2
+          inputs:
+            azureSubscription: $(serviceConnection)
+            scriptType: bash
+            scriptLocation: inlineScript
+            inlineScript: |
+              az apim api import \
+                --service-name $(apimName) \
+                --resource-group $(resourceGroup) \
+                --path myapi \
+                --api-id myapi \
+                --specification-format OpenApi \
+                --specification-path ./openapi.json
+              az apim api export \
+                --service-name $(apimName) \
+                --resource-group $(resourceGroup) \
+                --api-id myapi \
+                --format openapi-json \
+                --output-file myapi-export.json
+          displayName: 'Create & Export API in APIM'
+
+# Part 3 - .NET 8.x Build & Artifact
+- stage: DotNet_Build_Scan_Artifact
+  displayName: '.NET 8 Build, Test & Package'
+  jobs:
+    - job: BuildDotNetApp
+      pool:
+        vmImage: 'windows-latest'
+      steps:
+        - task: UseDotNet@2
+          inputs:
+            packageType: 'sdk'
+            version: '8.x'
+
+        - task: DotNetCoreCLI@2
+          displayName: 'Build Function App'
+          inputs:
+            command: 'build'
+            projects: '**/*.csproj'
+            arguments: '--output $(Build.ArtifactStagingDirectory)/function-package --configuration Release'
+
+        - task: DotNetCoreCLI@2
+          displayName: 'Run Tests'
+          inputs:
+            command: 'test'
+            projects: '**/*_test.csproj'
+
+        - task: ArchiveFiles@2
+          displayName: 'Archive'
+          inputs:
+            rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/function-package'
+            includeRootFolder: false
+            archiveType: 'zip'
+            archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildNumber).zip'
+
+        - task: PublishBuildArtifacts@1
+          inputs:
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(Build.BuildNumber).zip'
+            ArtifactName: 'drop'
+            publishLocation: 'Container'
+          displayName: 'Publish Artifact'
